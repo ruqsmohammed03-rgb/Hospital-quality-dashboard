@@ -32,12 +32,16 @@ table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;p
 <div class="card"><div class="row">
 <div><label>Condition (measure)</label><select id="fM"></select></div>
 <div><label>State</label><select id="fS"></select></div>
-<div><label>Min. discharges</label><input id="fD" type="number" value="25" min="0"></div></div></div>
+<div><label>Min. discharges</label><input id="fD" type="number" value="25" min="0"></div>
+<div><label>&nbsp;</label><button class="ghost" id="bExp">Export this view (CSV)</button></div></div></div>
 
 <div class="row" id="kpis"></div>
 
 <div class="card"><h2>2. Distribution of ERR across hospitals</h2><div id="hist"></div>
 <div class="note">Dashed line = 1.0 (as expected). Bars to the right are worse than expected.</div></div>
+
+<div class="card"><h2>ERR by state (median, top 15 highest)</h2><div id="st"></div>
+<div class="note">States with at least 5 hospitals for the selected condition. Longer bar = more excess readmissions.</div></div>
 
 <div class="row">
 <div class="card"><h2 class="good">Best 10 (lowest ERR)</h2><div class="scroll" id="best"></div></div>
@@ -98,7 +102,7 @@ function render(){const a=f().sort((x,y)=>x.err-y.err),n=a.length;
   return `<rect x="${x+1}" y="${H-h}" width="${W/20-2}" height="${h}" fill="${lo+i*w>=1?'var(--bad)':'var(--good)'}" opacity=".8"><title>${c} hospitals</title></rect>`}).join('')+
   `<line x1="${(1-lo)/w*W/20}" x2="${(1-lo)/w*W/20}" y1="0" y2="${H}" stroke="currentColor" stroke-dasharray="4"/>`+
   [.7,.9,1,1.1,1.3,1.5].map(v=>`<text x="${(v-lo)/w*W/20}" y="${H+16}" font-size="11" fill="currentColor" text-anchor="middle">${v}</text>`).join('')+'</svg>';
- $('best').innerHTML=tbl(a.slice(0,10));$('worst').innerHTML=tbl(a.slice(-10).reverse());
+ $('best').innerHTML=tbl(a.slice(0,10));$('worst').innerHTML=tbl(a.slice(-10).reverse());stChart();
  cmp()}
 function cmp(){$('sel').innerHTML=SEL.map(id=>{const r=ROWS.find(x=>x.id==id);return `<span class="chip" data-rm="${id}">${r.name} ✕</span>`}).join('');
  if(!SEL.length){$('cmp').innerHTML='';return}
@@ -109,7 +113,14 @@ const add=id=>{if(id&&!SEL.includes(id)&&SEL.length<5){SEL.push(id);cmp()}};
 document.addEventListener('click',e=>{const t=e.target.closest('tr.pick');if(t)add(t.dataset.id);
  const c=e.target.closest('[data-rm]');if(c){SEL=SEL.filter(x=>x!=c.dataset.rm);cmp()}
  const h=e.target.closest('[data-add]');if(h)add(h.dataset.add)});
+function stChart(){const m=$('fM').value,d=+$('fD').value||0,g={};
+ ROWS.forEach(r=>{if(r.measure==m&&(isNaN(r.disch)||r.disch>=d))(g[r.state]=g[r.state]||[]).push(r.err)});
+ const a=Object.entries(g).filter(([s,v])=>v.length>=5).map(([s,v])=>{v.sort((x,y)=>x-y);return[s,v[Math.floor(v.length/2)],v.length]}).sort((x,y)=>y[1]-x[1]).slice(0,15);
+ $('st').innerHTML=a.map(([s,v,n])=>`<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin:3px 0"><span style="width:28px">${s}</span><div style="height:14px;border-radius:3px;width:${Math.max(4,Math.min(100,(v-.8)/.4*100))}%;max-width:60%;background:var(--${v>1?'bad':'good'})"></div><b>${v.toFixed(3)}</b><span class="note">n=${n}</span></div>`).join('')||'<span class="note">Not enough data.</span>'}
+$('bExp').onclick=()=>{const a=f(),csv=['hospital,state,measure,discharges,err'].concat(a.map(r=>[`"${r.name}"`,r.state,r.measure,r.disch,r.err].join(','))).join('\n');
+ const l=document.createElement('a');l.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));l.download='readmissions_view.csv';l.click()};
 ['fM','fS','fD'].forEach(i=>$(i).oninput=render);
+fetch('data/hospital_readmissions.csv').then(r=>r.ok?r.text():Promise.reject()).then(t=>{const p=parseCSV(t);if(p.length)setData(p,'Bundled CMS data')}).catch(()=>{});
 $('q').oninput=e=>{const v=e.target.value.toLowerCase();const seen=new Map();
  if(v.length>2)ROWS.forEach(r=>{if(r.name.toLowerCase().includes(v)&&seen.size<8)seen.set(r.id,r.name)});
  $('hits').innerHTML=[...seen].map(([id,n])=>`<span class="chip" data-add="${id}">+ ${n}</span>`).join('')};
