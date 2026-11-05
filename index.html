@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hospital Readmissions Dashboard (CMS HRRP)</title>
+<style>
+:root{--bg:#f7f8fa;--card:#fff;--tx:#1c2230;--mu:#667085;--bd:#e3e6ec;--good:#1a7f5a;--bad:#c2410c;--ac:#2f5bea}
+@media(prefers-color-scheme:dark){:root{--bg:#12151c;--card:#1b2030;--tx:#e8ebf2;--mu:#98a2b3;--bd:#2c3347;--good:#4ade80;--bad:#fb923c;--ac:#7c9cff}}
+*{box-sizing:border-box}body{margin:0;font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--tx);padding:20px;max-width:1100px;margin:auto}
+h1{font-size:22px;margin:0}h2{font-size:16px;margin:0 0 10px}p.sub{color:var(--mu);margin:4px 0 16px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:16px;margin-bottom:14px}
+.row{display:flex;gap:12px;flex-wrap:wrap}.row>*{flex:1;min-width:230px}
+.kpi b{font-size:26px;display:block}.kpi span{color:var(--mu);font-size:13px}
+select,input,button{font:inherit;padding:6px 8px;border:1px solid var(--bd);border-radius:6px;background:var(--card);color:var(--tx)}
+button{cursor:pointer;background:var(--ac);color:#fff;border:0}button.ghost{background:none;color:var(--ac);border:1px solid var(--ac)}
+label{display:block;font-size:12px;color:var(--mu);margin-bottom:2px}
+table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--bd)}
+.scroll{overflow-x:auto}tr.pick{cursor:pointer}tr.pick:hover{background:var(--bg)}
+.good{color:var(--good)}.bad{color:var(--bad)}.note{font-size:12px;color:var(--mu)}#msg{font-size:13px;color:var(--mu);margin:6px 0}
+.chip{display:inline-block;background:var(--bg);border:1px solid var(--bd);border-radius:12px;padding:1px 8px;margin:2px;font-size:12px;cursor:pointer}
+</style></head><body>
+<h1>Hospital Readmissions Dashboard</h1>
+<p class="sub">CMS Hospital Readmissions Reduction Program (HRRP). Excess Readmission Ratio (ERR) &gt; 1 means more readmissions than expected for similar hospitals; &lt; 1 means fewer.</p>
+
+<div class="card"><h2>1. Load data</h2>
+<button id="bCMS">Load live from data.cms.gov</button>
+<button class="ghost" id="bDemo">Use synthetic demo data</button>
+<input type="file" id="bFile" accept=".csv">
+<div id="msg">No data loaded yet.</div>
+<div class="note">If the live load is blocked by your browser, download the CSV from the <a href="https://data.cms.gov/provider-data/dataset/9n3s-kdb3" target="_blank" rel="noopener">CMS dataset page</a> and choose it above.</div></div>
+
+<div id="app" hidden>
+<div class="card"><div class="row">
+<div><label>Condition (measure)</label><select id="fM"></select></div>
+<div><label>State</label><select id="fS"></select></div>
+<div><label>Min. discharges</label><input id="fD" type="number" value="25" min="0"></div></div></div>
+
+<div class="row" id="kpis"></div>
+
+<div class="card"><h2>2. Distribution of ERR across hospitals</h2><div id="hist"></div>
+<div class="note">Dashed line = 1.0 (as expected). Bars to the right are worse than expected.</div></div>
+
+<div class="row">
+<div class="card"><h2 class="good">Best 10 (lowest ERR)</h2><div class="scroll" id="best"></div></div>
+<div class="card"><h2 class="bad">Worst 10 (highest ERR)</h2><div class="scroll" id="worst"></div></div></div>
+
+<div class="card"><h2>3. Compare hospitals</h2>
+<div class="note">Click rows above, or search by name, to add up to 5 hospitals.</div>
+<input id="q" placeholder="Search hospital name…" style="width:100%;margin:8px 0"><div id="hits"></div>
+<div id="sel"></div><div class="scroll" id="cmp"></div></div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+let ROWS=[],SEL=[];
+const num=v=>{const n=parseFloat(v);return isFinite(n)?n:NaN};
+const key=k=>k.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'');
+function norm(r){const o={};for(const k in r)o[key(k)]=r[k];
+ return{id:o.facility_id||o.provider_id||o.cms_certification_number_ccn,name:o.facility_name||o.hospital_name,
+ state:o.state,measure:(o.measure_name||'').replace('READM-30-','').replace('-HRRP',''),
+ disch:num(o.number_of_discharges),err:num(o.excess_readmission_ratio),
+ pred:num(o.predicted_readmission_rate),exp:num(o.expected_readmission_rate),reads:num(o.number_of_readmissions)}}
+function parseCSV(t){const rows=[];let r=[],f='',q=false;
+ for(let i=0;i<t.length;i++){const c=t[i];
+  if(q){if(c=='"'&&t[i+1]=='"'){f+='"';i++}else if(c=='"')q=false;else f+=c}
+  else if(c=='"')q=true;else if(c==','){r.push(f);f=''}
+  else if(c=='\n'||c=='\r'){if(c=='\r'&&t[i+1]=='\n')i++;r.push(f);f='';rows.push(r);r=[]}else f+=c}
+ if(f||r.length){r.push(f);rows.push(r)}
+ const h=rows.shift();return rows.filter(x=>x.length==h.length).map(x=>Object.fromEntries(x.map((v,i)=>[h[i],v])))}
+function setData(raw,label){ROWS=raw.map(norm).filter(r=>r.name&&r.measure&&isFinite(r.err));
+ $('msg').textContent=label+': '+ROWS.length.toLocaleString()+' hospital-condition rows with a reported ERR.';
+ const ms=[...new Set(ROWS.map(r=>r.measure))].sort(),ss=[...new Set(ROWS.map(r=>r.state))].sort();
+ $('fM').innerHTML=ms.map(m=>`<option>${m}</option>`).join('');
+ $('fS').innerHTML='<option value="">All states</option>'+ss.map(s=>`<option>${s}</option>`).join('');
+ SEL=[];$('app').hidden=false;render()}
+$('bFile').onchange=e=>{const f=e.target.files[0];if(!f)return;const R=new FileReader();R.onload=()=>setData(parseCSV(R.result),f.name);R.readAsText(f)};
+$('bCMS').onclick=async()=>{$('msg').textContent='Fetching from CMS…';let all=[];
+ try{for(let o=0;;o+=500){const r=await fetch(`https://data.cms.gov/provider-data/api/1/datastore/query/9n3s-kdb3/0?limit=500&offset=${o}`);
+  if(!r.ok)throw 0;const j=await r.json();all=all.concat(j.results);$('msg').textContent='Fetched '+all.length+' rows…';
+  if(j.results.length<500)break}setData(all,'Live CMS data')}
+ catch(e){$('msg').textContent='Live load failed (likely browser/CORS). Download the CSV from CMS and use the file picker instead.'}};
+$('bDemo').onclick=()=>{let s=7;const rnd=()=>(s=(s*16807)%2147483647)/2147483647;
+ const M=['AMI','CABG','COPD','HF','HIP-KNEE','PN'],S=['IL','IN','OH','TX','CA','NY'],raw=[];
+ for(let i=0;i<300;i++){const base=1+(rnd()-.5)*.14;for(const m of M)raw.push({'Facility Name':'Demo Hospital '+(i+1),'Facility ID':'D'+i,State:S[i%6],
+  'Measure Name':'READM-30-'+m+'-HRRP','Number of Discharges':Math.round(20+rnd()*400),'Excess Readmission Ratio':(base+(rnd()-.5)*.2).toFixed(4)})}
+ setData(raw,'SYNTHETIC demo data (not real hospitals)')};
+const f=()=>{const m=$('fM').value,s=$('fS').value,d=+$('fD').value||0;
+ return ROWS.filter(r=>r.measure==m&&(!s||r.state==s)&&(isNaN(r.disch)||r.disch>=d))};
+const row=r=>`<tr class="pick" data-id="${r.id}"><td>${r.name}</td><td>${r.state}</td><td>${isNaN(r.disch)?'–':r.disch}</td><td><b>${r.err.toFixed(3)}</b></td></tr>`;
+const tbl=a=>`<table><tr><th>Hospital</th><th>St</th><th>Disch.</th><th>ERR</th></tr>${a.map(row).join('')}</table>`;
+function render(){const a=f().sort((x,y)=>x.err-y.err),n=a.length;
+ const med=n?a[Math.floor(n/2)].err:NaN,worse=a.filter(r=>r.err>1).length;
+ $('kpis').innerHTML=[[n.toLocaleString(),'hospitals in view'],[isNaN(med)?'–':med.toFixed(3),'median ERR'],
+  [n?Math.round(100*worse/n)+'%':'–','with ERR above 1.0 (excess)']].map(k=>`<div class="card kpi"><b>${k[0]}</b><span>${k[1]}</span></div>`).join('');
+ // histogram
+ const lo=.7,w=.04,B=Array(20).fill(0);a.forEach(r=>{B[Math.max(0,Math.min(19,Math.floor((r.err-lo)/w)))]++});
+ const mx=Math.max(1,...B),W=640,H=170;
+ $('hist').innerHTML=`<svg viewBox="0 0 ${W} ${H+24}" style="width:100%">`+B.map((c,i)=>{const h=c/mx*H,x=i*W/20;
+  return `<rect x="${x+1}" y="${H-h}" width="${W/20-2}" height="${h}" fill="${lo+i*w>=1?'var(--bad)':'var(--good)'}" opacity=".8"><title>${c} hospitals</title></rect>`}).join('')+
+  `<line x1="${(1-lo)/w*W/20}" x2="${(1-lo)/w*W/20}" y1="0" y2="${H}" stroke="currentColor" stroke-dasharray="4"/>`+
+  [.7,.9,1,1.1,1.3,1.5].map(v=>`<text x="${(v-lo)/w*W/20}" y="${H+16}" font-size="11" fill="currentColor" text-anchor="middle">${v}</text>`).join('')+'</svg>';
+ $('best').innerHTML=tbl(a.slice(0,10));$('worst').innerHTML=tbl(a.slice(-10).reverse());
+ cmp()}
+function cmp(){$('sel').innerHTML=SEL.map(id=>{const r=ROWS.find(x=>x.id==id);return `<span class="chip" data-rm="${id}">${r.name} ✕</span>`}).join('');
+ if(!SEL.length){$('cmp').innerHTML='';return}
+ const ms=[...new Set(ROWS.map(r=>r.measure))].sort(),col=v=>v==null?'':`background:color-mix(in srgb,${v>1?'var(--bad)':'var(--good)'} ${Math.min(60,Math.abs(v-1)*250)}%,transparent)`;
+ $('cmp').innerHTML=`<table><tr><th>Condition</th>${SEL.map(id=>`<th>${ROWS.find(x=>x.id==id).name}</th>`).join('')}</tr>`+
+  ms.map(m=>`<tr><td>${m}</td>${SEL.map(id=>{const r=ROWS.find(x=>x.id==id&&x.measure==m);return `<td style="${r?col(r.err):''}">${r?r.err.toFixed(3):'n/a'}</td>`}).join('')}</tr>`).join('')+'</table>'}
+const add=id=>{if(id&&!SEL.includes(id)&&SEL.length<5){SEL.push(id);cmp()}};
+document.addEventListener('click',e=>{const t=e.target.closest('tr.pick');if(t)add(t.dataset.id);
+ const c=e.target.closest('[data-rm]');if(c){SEL=SEL.filter(x=>x!=c.dataset.rm);cmp()}
+ const h=e.target.closest('[data-add]');if(h)add(h.dataset.add)});
+['fM','fS','fD'].forEach(i=>$(i).oninput=render);
+$('q').oninput=e=>{const v=e.target.value.toLowerCase();const seen=new Map();
+ if(v.length>2)ROWS.forEach(r=>{if(r.name.toLowerCase().includes(v)&&seen.size<8)seen.set(r.id,r.name)});
+ $('hits').innerHTML=[...seen].map(([id,n])=>`<span class="chip" data-add="${id}">+ ${n}</span>`).join('')};
+</script></body></html>
